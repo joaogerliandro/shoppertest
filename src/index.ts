@@ -19,7 +19,8 @@ app.listen(port, () => {
 });
 
 const isBase64Image = (image: string): boolean => {
-    const base64ImageRegex = /^data:image\/(png|jpg|jpeg|gif|bmp|webp);base64,/;
+    const base64ImageRegex = /^data:image\/(jpeg|png);base64,[A-Za-z0-9+/=]+$/;
+
     return base64ImageRegex.test(image);
 };
 
