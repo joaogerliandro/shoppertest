@@ -2,21 +2,67 @@ import express, { Request, Response } from 'express';
 import { z } from 'zod';
 import { parse, isValid } from 'date-fns';
 import dotenv from 'dotenv';
+import { GoogleAIFileManager } from "@google/generative-ai/server";
+import { writeFileSync, unlinkSync } from 'fs';
+import { v4 as uuidv4 } from 'uuid';
 
 dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3000;
+const apiKey = process.env.GEMINI_API_KEY || '';
+
+const fileManager = new GoogleAIFileManager(apiKey);
 
 app.use(express.json({limit: '10mb'}));
-
-app.get('/', (req: Request, res: Response) => {
-  res.send('[SERVER]: Project Setup !');
-});
 
 app.listen(port, () => {
   console.log(`[SERVER]: Server is running at PORT: ${port}`);
 });
+
+function base64ToFile(base64String: string, filePath: string) {
+    const base64Data = base64String.replace(/^data:image\/\w+;base64,/, '');
+    writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
+}
+
+function getMimeType(base64String: string): string {
+    const mimeTypeMatch = base64String.match(/^data:(image\/[a-zA-Z]+);base64,/);
+    return mimeTypeMatch ? mimeTypeMatch[1] : 'application/octet-stream';
+}
+
+function mimeTypeToFileExtension(mimeType: string): string {
+    switch (mimeType) {
+      case 'image/jpeg':
+        return 'jpg';
+      case 'image/png':
+        return 'png';
+      default:
+        return 'bin';
+    }
+}
+
+async function uploadBase64Image(base64Image: string) {
+    const mimeType = getMimeType(base64Image);
+
+    const fileExtension = mimeTypeToFileExtension(mimeType);
+
+    const tempFilePath = `./temp_${uuidv4()}.${fileExtension}`;
+
+    try {    
+        base64ToFile(base64Image, tempFilePath);
+
+        const uploadResponse = await fileManager.uploadFile(tempFilePath, {
+            mimeType: mimeType,
+            displayName: 'Uploaded Image',
+        });
+    
+        console.log(`Uploaded file ${uploadResponse.file.displayName} as: ${uploadResponse.file.uri}`);
+    } catch (error) {
+        console.error('Erro ao enviar imagem:', error);
+    } finally {
+        unlinkSync(tempFilePath);
+    }
+}
 
 const isBase64Image = (image: string): boolean => {
     const base64ImageRegex = /^data:image\/(jpeg|png);base64,[A-Za-z0-9+/=]+$/;
@@ -81,7 +127,11 @@ app.post('/upload', (req: Request, res: Response) => {
   
     const measurement: Measurement = result.data;
   
-    // TODO: Add Image Processment !
+    /* 
+        CheckDatabase(measurement) => {DateTime, Type}
+    */
+
+    uploadBase64Image(measurement.image);
 
     res.status(200).json({ 
         image_url: "",
