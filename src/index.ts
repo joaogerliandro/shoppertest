@@ -46,17 +46,25 @@ async function uploadBase64Image(base64Image: string) {
 
     const fileExtension = mimeTypeToFileExtension(mimeType);
 
-    const tempFilePath = `./temp_${uuidv4()}.${fileExtension}`;
+    const fileName = `${uuidv4()}`;
+
+    const tempFilePath = `./temp_${fileName}.${fileExtension}`;
 
     try {    
         base64ToFile(base64Image, tempFilePath);
 
         const uploadResponse = await fileManager.uploadFile(tempFilePath, {
             mimeType: mimeType,
-            displayName: 'Uploaded Image',
+            displayName: fileName
         });
-    
-        console.log(`Uploaded file ${uploadResponse.file.displayName} as: ${uploadResponse.file.uri}`);
+        
+        console.log(uploadResponse);
+
+        return { 
+            image_url: uploadResponse.file.uri,
+            measure_value: uploadResponse.file.sha256Hash,
+            measure_uuid: uploadResponse.file.displayName
+        };
     } catch (error) {
         console.error('Erro ao enviar imagem:', error);
     } finally {
@@ -120,7 +128,7 @@ interface Measurement {
     measure_type: 'WATER' | 'GAS';
 }
 
-app.post('/upload', (req: Request, res: Response) => {
+app.post('/upload', async (req: Request, res: Response) => {
     const result = measurementSchema.safeParse(req.body);
   
     if (!result.success) { return res.status(400).json(generateValidationErrorResponse(result.error.errors)); }
@@ -131,13 +139,15 @@ app.post('/upload', (req: Request, res: Response) => {
         CheckDatabase(measurement) => {DateTime, Type}
     */
 
-    uploadBase64Image(measurement.image);
+    try {
+        const uploadResult = await uploadBase64Image(measurement.image);
+        
+        res.status(200).json(uploadResult);
+    } catch (error) {
+        console.error('Erro ao fazer upload da imagem:', error);
 
-    res.status(200).json({ 
-        image_url: "",
-        measure_value: "",
-        measure_uuid: ""
-    });
+        res.status(500).json({ error: 'Erro interno do servidor' });
+    }
 });
 
 const generateValidationErrorResponse = (errors: z.ZodIssue[]) => {
