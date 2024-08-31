@@ -90,9 +90,12 @@ async function uploadBase64Image(measurement: Measurement) {
             { text: "Measure the value of this meter and return only the entire value, a integer value and nothing more." },
         ]);
 
-        const queryInsert = 'INSERT INTO public."Measurement" (uuid, value, datetime, type, confirmed) VALUES ($1, $2, $3, $4, $5)';
+        const queryInsert = 'INSERT INTO public."Measurement" (uuid, value, datetime, type, confirmed, customer_code, url) VALUES ($1, $2, $3, $4, $5, $6, $7)';
 
-        pool.query(queryInsert, [uploadResponse.file.name, parseInt(result.response.text()), measurement.measure_datetime, measurement.measure_type, false ]);
+        pool.query(queryInsert, [uploadResponse.file.name, parseInt(result.response.text()), 
+            measurement.measure_datetime, measurement.measure_type, 
+            false, measurement.customer_code, uploadResponse.file.uri ]
+        );
 
         return { 
             image_url: uploadResponse.file.uri,
@@ -159,6 +162,8 @@ const confirmationSchema = z.object({
     confirmed_value: z.number()
 });
 
+const measureTypeSchema = z.enum(['WATER', 'GAS']);
+
 interface Measurement {
     image: string;
     customer_code: string;
@@ -204,9 +209,10 @@ app.post('/upload', async (req: Request, res: Response) => {
 
         res.status(200).json(uploadResult);
     } catch (error) {
-        console.error('Image Upload Failed !:', error);
-
-        res.status(500).json({ error: 'Server Internal Error !' });
+        return res.status(500).json({
+            error_code: "INTERNAL_ERROR",
+            error_description: 'Server Internal Error.'
+        });
     }
 });
 
@@ -246,7 +252,72 @@ app.patch('/confirm', async (req: Request, res: Response) => {
             success: true
         });
     } catch (error) {
+        return res.status(500).json({
+            error_code: "INTERNAL_ERROR",
+            error_description: 'Server Internal Error.'
+        });
+    }
+});
 
+app.get('/:customer_code/list', async (req: Request, res: Response) => {
+    const { customer_code } = req.params;
+    const { measure_type } = req.query;
+
+    try{
+        let measureType: string | undefined = undefined;
+
+        if (measure_type !== undefined) {
+            if (typeof measure_type === 'string') {
+                const normalizedMeasureType = measure_type.toUpperCase();
+                
+                const result = measureTypeSchema.safeParse(normalizedMeasureType);
+
+                if (result.success) {
+                    measureType = result.data;
+                } else {
+                    return res.status(400).json({
+                        error_code: "INVALID_TYPE",
+                        error_description: 'Invalid value to parameter measure_type . Expected values WATER | GAS.'
+                    });
+                }
+            } else {
+                return res.status(400).json({
+                    error_code: "INVALID_TYPE",
+                    error_description: 'Invalid format to parameter measure_type. Expected format "string"'
+                });
+            }
+        }
+
+        const query = `SELECT * FROM public."Measurement" WHERE customer_code = $1${measureType ? ' AND measure_type = $2' : ''};`;
+        
+        const params = measureType ? [customer_code, measureType] : [customer_code];
+
+        console.log(params);
+
+        const result = await pool.query(query, params);
+
+        if (result.rows.length > 0) {
+            res.status(200).json({
+                customer_code: customer_code,
+                measures: result.rows.map(row => ({
+                    measure_uuid: row.uuid,
+                    measure_datetime: row.datetime,
+                    measure_type: row.type,
+                    has_confirmed: row.confirmed,
+                    image_url: row.url
+                }))
+            });
+        } else {
+            return res.status(404).json({
+                error_code: "INVALID_TYPE",
+                error_description: 'No meansure readings found to this customer.'
+            });
+        }
+    } catch (error) {
+        return res.status(500).json({
+            error_code: "MEASURES_NOT_FOUND",
+            error_description: 'Server Internal Error.'
+        });
     }
 });
 
