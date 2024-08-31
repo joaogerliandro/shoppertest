@@ -6,6 +6,7 @@ import { GoogleAIFileManager } from "@google/generative-ai/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { writeFileSync, unlinkSync } from 'fs';
 import { v4 as uuidv4 } from 'uuid';
+import pool from './db';
 
 dotenv.config();
 
@@ -19,6 +20,21 @@ const genAI = new GoogleGenerativeAI(apiKey);
 const model = genAI.getGenerativeModel({
   model: "gemini-1.5-pro",
 });
+
+const formats = [
+    "yyyy-MM-dd'T'HH:mm:ss.SSSxxx", 
+    'dd/MM/yyyy', 
+    'MM/dd/yyyy', 
+    "yyyy/MM/dd", 
+    'dd-MM-yyyy', 
+    'MM-dd-yyyy', 
+    'yyyy-MM-dd', 
+    'yyyy.MM.dd', 
+    'dd MMM yyyy', 
+    'yyyy/MM/dd HH:mm:ss', 
+    'MM/dd/yyyy HH:mm:ss', 
+    'yyyy-MM-ddTHH:mm',
+];
 
 app.use(express.json({limit: '10mb'}));
 
@@ -47,8 +63,8 @@ function mimeTypeToFileExtension(mimeType: string): string {
     }
 }
 
-async function uploadBase64Image(base64Image: string) {
-    const mimeType = getMimeType(base64Image);
+async function uploadBase64Image(measurement: Measurement) {
+    const mimeType = getMimeType(measurement.image);
 
     const fileExtension = mimeTypeToFileExtension(mimeType);
 
@@ -57,7 +73,7 @@ async function uploadBase64Image(base64Image: string) {
     const tempFilePath = `./${fileName}.${fileExtension}`;
 
     try {    
-        base64ToFile(base64Image, tempFilePath);
+        base64ToFile(measurement.image, tempFilePath);
 
         const uploadResponse = await fileManager.uploadFile(tempFilePath, {
             mimeType: mimeType,
@@ -73,6 +89,10 @@ async function uploadBase64Image(base64Image: string) {
             },
             { text: "Measure the value of this meter and return only the entire value, a integer value and nothing more." },
         ]);
+
+        const queryInsert = 'INSERT INTO public."Measurement" (uuid, value, datetime, type) VALUES ($1, $2, $3, $4)';
+
+        pool.query(queryInsert, [uploadResponse.file.name, parseInt(result.response.text()), measurement.measure_datetime, measurement.measure_type ]);
 
         return { 
             image_url: uploadResponse.file.uri,
@@ -93,26 +113,22 @@ const isBase64Image = (image: string): boolean => {
 };
 
 const isDateTimeValid = (date_time: string): boolean => {
-    const formats = [
-        "yyyy-MM-dd'T'HH:mm:ss.SSSxxx", 
-        'dd/MM/yyyy', 
-        'MM/dd/yyyy', 
-        "yyyy/MM/dd", 
-        'dd-MM-yyyy', 
-        'MM-dd-yyyy', 
-        'yyyy-MM-dd', 
-        'yyyy.MM.dd', 
-        'dd MMM yyyy', 
-        'yyyy/MM/dd HH:mm:ss', 
-        'MM/dd/yyyy HH:mm:ss', 
-        'yyyy-MM-ddTHH:mm',
-    ];
-    
     return formats.some(format => {
         const parsedDate = parse(date_time, format, new Date());
         return isValid(parsedDate);
     });
 };
+
+function parseDateFromFormats(dateString: string): Date | null {
+    for (const format of formats) {
+        const parsedDate = parse(dateString, format, new Date());
+        if (isValid(parsedDate)) {
+            return parsedDate;
+        }
+    }
+
+    return null;
+}
 
 const measurementSchema = z.object({
     image: z.string()
@@ -150,8 +166,29 @@ app.post('/upload', async (req: Request, res: Response) => {
     const measurement: Measurement = result.data;
 
     try {
-        const uploadResult = await uploadBase64Image(measurement.image);
-        
+        const date = parseDateFromFormats(measurement.measure_datetime);
+
+        if(date != null)
+        {
+            const month = date.getUTCMonth() + 1;
+            const year = date.getUTCFullYear();
+            const type = measurement.measure_type;
+
+            const queryCount = `SELECT COUNT(*) FROM public."Measurement" WHERE EXTRACT(MONTH FROM datetime) = $1 AND EXTRACT(YEAR FROM datetime) = $2 AND type = $3;`;    
+
+            const { rows } = await pool.query(queryCount, [month, year, type]);
+            const orderCount = parseInt(rows[0].count, 10);
+
+            if (orderCount > 0) {
+                return res.status(409).json({
+                    error_code: "DOUBLE_REPORT",
+                    error_description: `There is already a reading for the type ${measurement.measure_type} for the month entered.`
+                });
+            }
+        }
+
+        const uploadResult = await uploadBase64Image(measurement);
+
         res.status(200).json(uploadResult);
     } catch (error) {
         console.error('Erro ao fazer upload da imagem:', error);
