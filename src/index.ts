@@ -297,7 +297,7 @@ app.get('/:customer_code/list', async (req: Request, res: Response) => {
             }
         }
 
-        const query = `SELECT * FROM public."Measurement" WHERE customer_code = $1${measureType ? ' AND measure_type = $2' : ''};`;
+        const query = `SELECT * FROM public."Measurement" WHERE customer_code = $1${measureType ? ' AND type = $2' : ''};`;
         
         const params = measureType ? [customer_code, measureType] : [customer_code];
 
