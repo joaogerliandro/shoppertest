@@ -90,9 +90,9 @@ async function uploadBase64Image(measurement: Measurement) {
             { text: "Measure the value of this meter and return only the entire value, a integer value and nothing more." },
         ]);
 
-        const queryInsert = 'INSERT INTO public."Measurement" (uuid, value, datetime, type) VALUES ($1, $2, $3, $4)';
+        const queryInsert = 'INSERT INTO public."Measurement" (uuid, value, datetime, type, confirmed) VALUES ($1, $2, $3, $4, $5)';
 
-        pool.query(queryInsert, [uploadResponse.file.name, parseInt(result.response.text()), measurement.measure_datetime, measurement.measure_type ]);
+        pool.query(queryInsert, [uploadResponse.file.name, parseInt(result.response.text()), measurement.measure_datetime, measurement.measure_type, false ]);
 
         return { 
             image_url: uploadResponse.file.uri,
@@ -151,11 +151,24 @@ const measurementSchema = z.object({
     measure_type: z.enum(['WATER', 'GAS'])
 });
 
+const confirmationSchema = z.object({
+    measure_uuid: z.string()
+    .min(1, {
+        message: "UUID can not be empty !"
+    }),
+    confirmed_value: z.number()
+});
+
 interface Measurement {
     image: string;
     customer_code: string;
     measure_datetime: string;
     measure_type: 'WATER' | 'GAS';
+}
+
+interface Confirmation {
+    measure_uuid: string;
+    confirmed_value: number;
 }
 
 app.post('/upload', async (req: Request, res: Response) => {
@@ -191,14 +204,50 @@ app.post('/upload', async (req: Request, res: Response) => {
 
         res.status(200).json(uploadResult);
     } catch (error) {
-        console.error('Erro ao fazer upload da imagem:', error);
+        console.error('Image Upload Failed !:', error);
 
-        res.status(500).json({ error: 'Erro interno do servidor' });
+        res.status(500).json({ error: 'Server Internal Error !' });
     }
 });
 
 app.patch('/confirm', async (req: Request, res: Response) => {
+    const result = confirmationSchema.safeParse(req.body);
 
+    if (!result.success) { return res.status(400).json(generateValidationErrorResponse(result.error.errors)); }
+
+    const confirmation: Confirmation = result.data;
+
+    try{
+        const queryCount = `SELECT COUNT(*) FROM public."Measurement" WHERE uuid = $1;`;
+
+        const { rows } = await pool.query(queryCount, [confirmation.measure_uuid]);
+        const orderCount = parseInt(rows[0].count, 10);
+
+        if (orderCount < 1) {
+            return res.status(404).json({
+                error_code: "MEASURE_NOT_FOUND",
+                error_description: `Measure with UUID: ${confirmation.measure_uuid} not found.`
+            });
+        }
+
+        const result = await pool.query(`SELECT confirmed FROM public."Measurement" WHERE uuid = $1;`, [confirmation.measure_uuid]);
+
+        if(result.rows[0].confirmed)
+        {
+            return res.status(409).json({
+                error_code: "CONFIRMATION_DUPLICATE",
+                error_description: `Measure with UUID: ${confirmation.measure_uuid} already confirmed.`
+            });
+        }
+
+        pool.query(`UPDATE public."Measurement" SET confirmed = $1, value = $2 WHERE uuid = $3;`, [true, confirmation.confirmed_value, confirmation.measure_uuid]);
+
+        res.status(200).json({
+            success: true
+        });
+    } catch (error) {
+
+    }
 });
 
 const generateValidationErrorResponse = (errors: z.ZodIssue[]) => {
