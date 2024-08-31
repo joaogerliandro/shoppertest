@@ -160,7 +160,9 @@ app.post('/upload', async (req: Request, res: Response) => {
     }
 });
 
-app.patch('/confirm')
+app.patch('/confirm', async (req: Request, res: Response) => {
+
+});
 
 const generateValidationErrorResponse = (errors: z.ZodIssue[]) => {
     const errorDetails: Record<string, string[]> = {};
