@@ -1,6 +1,6 @@
 import express, { Request, Response } from 'express';
 import { z } from 'zod';
-import { parse, isValid } from 'date-fns';
+import { format, parse, isValid } from 'date-fns';
 import dotenv from 'dotenv';
 import { GoogleAIFileManager } from "@google/generative-ai/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
@@ -63,7 +63,7 @@ function mimeTypeToFileExtension(mimeType: string): string {
     }
 }
 
-async function uploadBase64Image(measurement: Measurement) {
+async function uploadBase64Image(measurement: Measurement, date: Date) {
     const mimeType = getMimeType(measurement.image);
 
     const fileExtension = mimeTypeToFileExtension(mimeType);
@@ -90,10 +90,12 @@ async function uploadBase64Image(measurement: Measurement) {
             { text: "Measure the value of this meter and return only the entire value, a integer value and nothing more." },
         ]);
 
+        const formattedDate = format(date, 'yyyy-MM-dd');
+
         const queryInsert = 'INSERT INTO public."Measurement" (uuid, value, datetime, type, confirmed, customer_code, url) VALUES ($1, $2, $3, $4, $5, $6, $7)';
 
         pool.query(queryInsert, [uploadResponse.file.name, parseInt(result.response.text()), 
-            measurement.measure_datetime, measurement.measure_type, 
+            formattedDate, measurement.measure_type, 
             false, measurement.customer_code, uploadResponse.file.uri ]
         );
 
@@ -203,11 +205,18 @@ app.post('/upload', async (req: Request, res: Response) => {
                     error_description: `There is already a reading for the type ${measurement.measure_type} for the month entered.`
                 });
             }
+
+            const uploadResult = await uploadBase64Image(measurement, date);
+
+            res.status(200).json(uploadResult);
         }
-
-        const uploadResult = await uploadBase64Image(measurement);
-
-        res.status(200).json(uploadResult);
+        else
+        {
+            return res.status(400).json({
+                error_code: "INVALID_DATA",
+                error_description: 'Invalid datetime format.'
+            });
+        }
     } catch (error) {
         return res.status(500).json({
             error_code: "INTERNAL_ERROR",
@@ -292,8 +301,6 @@ app.get('/:customer_code/list', async (req: Request, res: Response) => {
         
         const params = measureType ? [customer_code, measureType] : [customer_code];
 
-        console.log(params);
-
         const result = await pool.query(query, params);
 
         if (result.rows.length > 0) {
@@ -315,7 +322,7 @@ app.get('/:customer_code/list', async (req: Request, res: Response) => {
         }
     } catch (error) {
         return res.status(500).json({
-            error_code: "MEASURES_NOT_FOUND",
+            error_code: "INTERNAL_ERROR",
             error_description: 'Server Internal Error.'
         });
     }
