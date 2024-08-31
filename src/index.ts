@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { parse, isValid } from 'date-fns';
 import dotenv from 'dotenv';
 import { GoogleAIFileManager } from "@google/generative-ai/server";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { writeFileSync, unlinkSync } from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -13,6 +14,11 @@ const port = process.env.PORT || 3000;
 const apiKey = process.env.GEMINI_API_KEY || '';
 
 const fileManager = new GoogleAIFileManager(apiKey);
+const genAI = new GoogleGenerativeAI(apiKey);
+
+const model = genAI.getGenerativeModel({
+  model: "gemini-1.5-pro",
+});
 
 app.use(express.json({limit: '10mb'}));
 
@@ -46,24 +52,32 @@ async function uploadBase64Image(base64Image: string) {
 
     const fileExtension = mimeTypeToFileExtension(mimeType);
 
-    const fileName = `${uuidv4()}`;
+    const fileName = `temp_${uuidv4()}`;
 
-    const tempFilePath = `./temp_${fileName}.${fileExtension}`;
+    const tempFilePath = `./${fileName}.${fileExtension}`;
 
     try {    
         base64ToFile(base64Image, tempFilePath);
 
         const uploadResponse = await fileManager.uploadFile(tempFilePath, {
             mimeType: mimeType,
-            displayName: fileName
+            displayName: `${fileName}.${fileExtension}`
         });
         
-        console.log(uploadResponse);
+        const result = await model.generateContent([
+            {
+              fileData: {
+                mimeType: uploadResponse.file.mimeType,
+                fileUri: uploadResponse.file.uri
+              }
+            },
+            { text: "Measure the value of this meter and return only the entire value, a integer value and nothing more." },
+        ]);
 
         return { 
             image_url: uploadResponse.file.uri,
-            measure_value: uploadResponse.file.sha256Hash,
-            measure_uuid: uploadResponse.file.displayName
+            measure_value: parseInt(result.response.text()),
+            measure_uuid: uploadResponse.file.name
         };
     } catch (error) {
         console.error('Erro ao enviar imagem:', error);
@@ -134,10 +148,6 @@ app.post('/upload', async (req: Request, res: Response) => {
     if (!result.success) { return res.status(400).json(generateValidationErrorResponse(result.error.errors)); }
   
     const measurement: Measurement = result.data;
-  
-    /* 
-        CheckDatabase(measurement) => {DateTime, Type}
-    */
 
     try {
         const uploadResult = await uploadBase64Image(measurement.image);
@@ -149,6 +159,8 @@ app.post('/upload', async (req: Request, res: Response) => {
         res.status(500).json({ error: 'Erro interno do servidor' });
     }
 });
+
+app.patch('/confirm')
 
 const generateValidationErrorResponse = (errors: z.ZodIssue[]) => {
     const errorDetails: Record<string, string[]> = {};
